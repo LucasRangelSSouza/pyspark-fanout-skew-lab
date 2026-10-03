@@ -1,0 +1,45 @@
+name: Benchmark
+
+# Runs every scenario and variant three times on a standard GitHub runner (4 vCPU, 16 GB),
+# then publishes the results as an artifact. Anyone can rerun it from the Actions tab.
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: Rows in the main fact tables
+        default: "20000000"
+  push:
+    branches: [main]
+    paths: ["lab/**", ".github/workflows/bench.yml"]
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: pip install -r requirements.txt
+      - name: Generate data
+        run: python -m lab.bench generate --rows "${{ inputs.rows || '20000000' }}" --data /tmp/lab-data
+      - name: Run scenarios
+        run: |
+          for repeat in 1 2 3; do
+            for scenario in duplicate_key hot_key weak_window_key legitimate_fanout; do
+              for variant in naive wrong right; do
+                python -m lab.bench run --scenario $scenario --variant $variant --data /tmp/lab-data --out results.jsonl --repeat $repeat
+              done
+            done
+          done
+      - name: Summary
+        run: python -m lab.summary results.jsonl | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: results
+          path: results.jsonl
