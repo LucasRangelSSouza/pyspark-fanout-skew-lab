@@ -92,8 +92,10 @@ def hot_key(spark: SparkSession, path: str, variant: str) -> DataFrame:
 def weak_window_key(spark: SparkSession, path: str, variant: str) -> DataFrame:
     entries = spark.read.parquet(f"{path}/entries")
     if variant == "right":
-        # The strong key: the document plus the source and the entry id, so rows with no document are not one group.
-        window = Window.partitionBy("document", "source", "entry_id").orderBy("amount")
+        # Rows with no document are unrelated to each other: give each one its own key instead of the shared "".
+        # Rows with a document keep exactly the grouping of the naive query.
+        key = F.when(F.col("document") == "", F.concat(F.lit("no-doc:"), F.col("entry_id").cast("string")))                .otherwise(F.col("document"))
+        window = Window.partitionBy(key).orderBy("amount")
     else:
         if variant == "wrong":
             spark.conf.set("spark.sql.shuffle.partitions", "800")
