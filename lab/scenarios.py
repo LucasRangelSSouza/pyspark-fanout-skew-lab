@@ -50,15 +50,15 @@ def generate(spark: SparkSession, rows: int, path: str) -> None:
         (F.rand(8) * 1000).alias("amount"),
     ).write.mode("overwrite").parquet(f"{path}/entries")
 
-    # 4. Legitimate fan-out: every card has 20 plates, and every transaction belongs to a card.
-    cards = keys
-    spark.range(cards * 20).select(
-        (F.col("id") % cards).alias("card_id"),
-        F.concat(F.lit("P"), F.col("id").cast("string")).alias("plate"),
-    ).write.mode("overwrite").parquet(f"{path}/plates")
+    # 4. Legitimate fan-out: every account has 20 users, and every transaction belongs to an account.
+    accounts = keys
+    spark.range(accounts * 20).select(
+        (F.col("id") % accounts).alias("account_id"),
+        F.concat(F.lit("U"), F.col("id").cast("string")).alias("user"),
+    ).write.mode("overwrite").parquet(f"{path}/users")
     spark.range(rows // 4).select(
         F.col("id").alias("tx_id"),
-        (F.rand(9) * cards).cast("long").alias("card_id"),
+        (F.rand(9) * accounts).cast("long").alias("account_id"),
         (F.rand(10) * 300).alias("amount"),
     ).write.mode("overwrite").parquet(f"{path}/transactions")
 
@@ -104,19 +104,19 @@ def weak_window_key(spark: SparkSession, path: str, variant: str) -> DataFrame:
 
 
 def legitimate_fanout(spark: SparkSession, path: str, variant: str) -> DataFrame:
-    plates, tx = spark.read.parquet(f"{path}/plates"), spark.read.parquet(f"{path}/transactions")
+    users, tx = spark.read.parquet(f"{path}/users"), spark.read.parquet(f"{path}/transactions")
     if variant == "right":
-        # Aggregate each side to one row per card, then join: no row multiplication.
-        spend = tx.groupBy("card_id").agg(F.sum("amount").alias("spend"), F.count("*").alias("transactions"))
-        fleet = plates.groupBy("card_id").agg(F.count("*").alias("plates"))
-        return spend.join(fleet, "card_id")
+        # Aggregate each side to one row per account, then join: no row multiplication.
+        spend = tx.groupBy("account_id").agg(F.sum("amount").alias("spend"), F.count("*").alias("transactions"))
+        members = users.groupBy("account_id").agg(F.count("*").alias("users"))
+        return spend.join(members, "account_id")
     if variant == "wrong":
         spark.conf.set("spark.sql.shuffle.partitions", "800")
-    joined = tx.join(plates, "card_id")  # every transaction repeated once per plate
-    return joined.groupBy("card_id").agg(
-        (F.sum("amount") / F.count("plate") * F.countDistinct("tx_id")).alias("spend"),
+    joined = tx.join(users, "account_id")  # every transaction repeated once per user
+    return joined.groupBy("account_id").agg(
+        (F.sum("amount") / F.count("user") * F.countDistinct("tx_id")).alias("spend"),
         F.countDistinct("tx_id").alias("transactions"),
-        F.countDistinct("plate").alias("plates"),
+        F.countDistinct("user").alias("users"),
     )
 
 
